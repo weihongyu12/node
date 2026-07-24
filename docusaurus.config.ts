@@ -156,6 +156,14 @@ const config: Config = {
           title: 'More',
           items: [
             {
+              label: 'Web版',
+              href: 'https://weihongyu12.github.io/web/',
+            },
+            {
+              label: '小程序版',
+              href: 'https://weihongyu12.github.io/miniprogram/',
+            },
+            {
               label: 'Blog',
               href: 'https://weihongyu.com/',
             },
