@@ -77,12 +77,12 @@ graph TD
 | 日志 | nestjs-pino（pino，Fastify 原生日志器） |
 | 健康检查 | `@nestjs/terminus` |
 | 单元测试 | Jest |
-| 代码检查 | ESLint + Prettier |
+| 代码检查 | ESLint |
 | 部署 | Docker |
 
 ## 分层结构
 
-NestJS 以**模块（Module）**为组织单元，模块内按职责拆分控制器、服务、网关与解析器：
+NestJS 以 **模块（Module）** 为组织单元，模块内按职责拆分控制器、服务、网关与解析器：
 
 - `controller`：HTTP 端点，仅承载少量无法被 GraphQL 覆盖的 REST 端点（如健康检查、回调接收）
 - `gateway`：WebSocket 网关，管理连接生命周期、事件订阅与推送
