@@ -114,6 +114,7 @@ export class WsThrottlerGuard implements CanActivate {
 </Tabs>
 
 - 限流维度：用户 ID（已认证）→ IP（未认证）
+- SSE 端点与普通 REST 同属 HTTP 上下文，默认受全局 Throttler 约束；单用户并发连接数按需自行计数限制
 - GraphQL 按查询复杂度限流（见 [GraphQL · 查询安全](../graphql/README.md#查询安全)），而非仅按请求数
 
 ## 参数校验

@@ -1,17 +1,18 @@
 ---
 title: 功能设计
-description: Node.js 服务功能设计总览，实时通信、聚合查询、认证授权与安全基线四大能力的职责与边界
+description: Node.js 服务功能设计总览，实时通信（WebSocket 与 SSE）、聚合查询、认证授权与安全基线五大能力的职责与边界
 ---
 
 # 功能设计
 
-Node.js 服务的功能围绕“传统后端的补充”定位展开，共四大能力模块：
+Node.js 服务的功能围绕“传统后端的补充”定位展开，共五大能力模块：
 
 | 模块 | 职责 | 对应传统后端的能力缺口 |
 |------|------|----------------------|
 | [WebSocket 实时通信](./websocket/README.md) | 长连接管理、事件订阅、实时推送、多实例广播 | 同步请求-响应模型无法维持海量长连接 |
+| [SSE 实时推送](./sse/README.md) | 基于 HTTP 的服务端单向推送、事件流管理 | 低频单向推送无需引入完整 WebSocket 协议 |
 | [GraphQL 聚合查询](./graphql/README.md) | 跨服务数据聚合、BFF 数据拼装、字段级批处理 | 多服务聚合编排成本高、接口爆炸 |
-| [认证授权](./authentication/README.md) | JWT 校验、三类入口统一鉴权、权限判定 | 无缺口——与传统后端完全对齐 |
+| [认证授权](./authentication/README.md) | JWT 校验、四类入口统一鉴权、权限判定 | 无缺口——与传统后端完全对齐 |
 | [安全基线](./security/README.md) | 安全头、CORS、限流、参数校验、错误脱敏 | 无缺口——与传统后端完全对齐 |
 
 ## 设计原则
@@ -28,13 +29,14 @@ Node.js 服务的功能围绕“传统后端的补充”定位展开，共四大
 - 同一套业务错误码表
 - 同样的安全头、CORS 白名单、限流策略与参数校验强度
 
-### 3. 横切能力一次实现，三类入口复用
+### 3. 横切能力一次实现，四类入口复用
 
-借助 NestJS 的 Guard / Pipe / Interceptor / Filter 在 HTTP、WebSocket、GraphQL 上下文通用的特性，认证、校验、日志、错误处理只实现一次：
+借助 NestJS 的 Guard / Pipe / Interceptor / Filter 在 HTTP、WebSocket、GraphQL 上下文通用的特性，认证、校验、日志、错误处理只实现一次（SSE 与普通 REST 同属 HTTP 上下文，天然复用）：
 
 ```mermaid
 graph LR
     REST[REST 请求] --> G[JwtAuthGuard]
+    SSE[SSE 连接] --> G
     WS[WS 事件] --> G
     GQL[GraphQL 操作] --> G
     G --> P[ValidationPipe]

@@ -1,6 +1,6 @@
 ---
 title: 认证授权
-description: Node.js 服务的认证授权设计——JWT 校验、三类入口统一鉴权、权限判定，与传统后端完全对齐
+description: Node.js 服务的认证授权设计——JWT 校验、四类入口统一鉴权、权限判定，与传统后端完全对齐
 ---
 
 import Tabs from '@theme/Tabs';
@@ -76,9 +76,9 @@ export class AuthService {
 }
 ```
 
-## 三类入口统一鉴权
+## 四类入口统一鉴权
 
-同一套 Guard 逻辑适配 HTTP、WebSocket、GraphQL 三种上下文，通过 `GqlExecutionContext` 与 `WsExecutionContext` 提取令牌：
+同一套 Guard 逻辑适配 HTTP、WebSocket、GraphQL 三种上下文（REST 与 SSE 同属 HTTP 上下文，共四类入口），通过 `GqlExecutionContext` 与 `WsExecutionContext` 提取令牌：
 
 <Tabs>
   <TabItem value="guard" label="统一 Guard">
@@ -206,4 +206,5 @@ export class RolesGuard implements CanActivate {
 :::tip[参见]
 - [接口设计规范 · 鉴权约定](../../specification/api/README.md#鉴权约定)
 - [WebSocket · 连接鉴权](../websocket/README.md#连接鉴权)
+- [SSE · 客户端](../sse/README.md#客户端)（原生 EventSource 不支持请求头，需 `@microsoft/fetch-event-source` 传递令牌）
 :::

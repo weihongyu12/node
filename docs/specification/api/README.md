@@ -1,11 +1,11 @@
 ---
 title: 接口设计规范
-description: Node.js 服务对外的三类接口设计规范——REST 端点、WebSocket 事件与 GraphQL Schema 的命名、错误模型与版本策略
+description: Node.js 服务对外的四类接口设计规范——REST 端点、WebSocket 事件、SSE 事件流与 GraphQL Schema 的命名、错误模型与版本策略
 ---
 
 # 接口设计规范
 
-Node.js 服务对外暴露三类接口，分别遵循不同规范，但共享同一套错误模型与鉴权约定。
+Node.js 服务对外暴露四类接口，分别遵循不同规范，但共享同一套错误模型与鉴权约定。
 
 ## 入口划分
 
@@ -13,10 +13,11 @@ Node.js 服务对外暴露三类接口，分别遵循不同规范，但共享同
 |------|------------|---------|
 | REST | `/api/**` | 健康检查、第三方回调、无法被 GraphQL 覆盖的运维端点 |
 | WebSocket | `/socket.io/` | 实时推送、订阅管理、双向信令 |
+| SSE | `/sse/**` | 服务端单向推送（看板大屏、进度、低频通知） |
 | GraphQL | `/graphql` | 聚合查询、BFF 数据拼装 |
 
 :::tip
-业务查询优先走 GraphQL，实时推送走 WebSocket，REST 仅作兜底——避免三类接口职责混用。
+业务查询优先走 GraphQL，双向/高频推送走 WebSocket，单向/低频推送走 SSE，REST 仅作兜底——避免四类接口职责混用。
 :::
 
 ## REST 端点规范
@@ -95,6 +96,36 @@ app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
 - 服务端必须实现 `handleConnection` 校验令牌，非法连接立即 `disconnect()`
 - 断线重连由客户端指数退避驱动，服务端不保留离线消息（离线消息归传统后端的站内信/推送通道）
 
+## SSE 事件流规范
+
+### 路径命名
+
+- 统一挂载在 `/sse/**` 前缀下，按业务域划分子路径：`/sse/device-status`、`/sse/dashboard`
+- 子路径使用小写连字符，层级不超过两级：`/sse/{业务域}`
+
+### 事件结构
+
+SSE 事件通过 `MessageEvent` 字段映射协议行，与 WebSocket 事件共用同一套命名约定：
+
+```json
+{
+  "id": "evt-1024",
+  "type": "device:status-changed",
+  "data": { "deviceId": "D-001", "status": "online" }
+}
+```
+
+- `type`：事件名，使用 `{域}:{动作}` 格式（与 WebSocket 事件命名一致）；不设置时客户端按默认 `message` 事件接收
+- `data`：业务负载，传对象由 NestJS 自动 JSON 序列化
+- `id`：事件标识，用于客户端断线重连时的 `Last-Event-ID` 续传，单调递增
+- `retry`：可选，指定客户端重连间隔（毫秒），默认由浏览器决定
+
+### 连接管理
+
+- 鉴权令牌通过 `Authorization: Bearer <token>` 请求头传递（与 REST 一致），不支持 URL query 传令牌
+- 断线重连由浏览器 EventSource 自动完成，服务端不保留离线消息
+- 周期性下发心跳事件（建议 30s），防止中间代理按空闲超时断连
+
 ## GraphQL Schema 规范
 
 ### 命名
@@ -112,7 +143,7 @@ app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
 
 ## 错误模型
 
-三类入口的错误码统一，与传统后端共用码表：
+四类入口的错误码统一，与传统后端共用码表：
 
 | code 区间 | 含义 | 示例 |
 |-----------|------|------|
@@ -125,6 +156,7 @@ app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
 
 - REST：通过全局 Exception Filter 映射为信封结构
 - WebSocket：ack 响应与异常统一为 `WsException`，错误码放入响应 `code` 字段
+- SSE：建连阶段错误与 REST 一致走信封结构；建连成功后流内异常直接断开连接，由客户端自动重连恢复
 - GraphQL：业务错误通过 `errors[].extensions.code` 返回，HTTP 状态码保持 200
 
 :::warning
@@ -133,10 +165,11 @@ app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
 
 ## 鉴权约定
 
-三类入口共用同一套 JWT 校验（见 [功能设计 · 认证授权](../../features/authentication/README.md)）：
+四类入口共用同一套 JWT 校验（见 [功能设计 · 认证授权](../../features/authentication/README.md)）：
 
 | 入口 | 令牌传递方式 |
 |------|-------------|
 | REST | `Authorization: Bearer <token>` 请求头 |
 | GraphQL | `Authorization: Bearer <token>` 请求头 |
+| SSE | `Authorization: Bearer <token>` 请求头（原生 EventSource 不支持请求头，客户端需用 `@microsoft/fetch-event-source`） |
 | WebSocket | 握手 `auth.token` 字段 |

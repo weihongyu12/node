@@ -28,6 +28,7 @@ graph TD
     GW -->|/api/** 静态路由| SP[Spring 微服务集群<br/>业务数据源]
     GW -->|/graphql 静态路由| NODE[Node.js 服务<br/>NestJS + Fastify]
     GW -->|/socket.io/ WS 路由| NODE
+    GW -->|/sse/** HTTP 长连接路由| NODE
     NODE -->|内部 REST 调用| SP
     NODE -->|消费/生产事件| KAFKA[Kafka]
     SP -->|发布领域事件| KAFKA
@@ -48,6 +49,7 @@ graph TD
 | 业务 CRUD / 事务 / 数据持久化 | ✔️ 唯一数据源 | ❌ 不承接 |
 | 用户体系 / 令牌签发 / 权限定义 | ✔️ | ❌ 仅校验令牌 |
 | WebSocket 长连接 / 实时推送 | ❌ | ✔️ 核心职责 |
+| SSE 服务端单向推送 | ⚠️ 可实现但长连接成本高 | ✔️ |
 | 聚合查询（GraphQL BFF） | ⚠️ 可实现但编排成本高 | ✔️ 核心职责 |
 | 事件驱动的通知编排 | ⚠️ | ✔️ |
 | CPU 密集计算（报表 / 导出 / 图像处理） | ✔️ | ❌ 单线程事件循环不适用 |
@@ -66,6 +68,7 @@ graph TD
 | 框架 | NestJS |
 | HTTP 平台 | Fastify（`@nestjs/platform-fastify`） |
 | WebSocket | Socket.IO（`@nestjs/platform-socket.io`） |
+| SSE | NestJS 内置 `@Sse()`（`@nestjs/common`，无额外依赖） |
 | GraphQL | Apollo Server（`@nestjs/apollo` + `@as-integrations/fastify`） |
 | 语言 | TypeScript |
 | 认证 | JWT（`@nestjs/jwt`，与传统后端同源密钥 / JWKS） |
@@ -84,11 +87,11 @@ graph TD
 
 NestJS 以 **模块（Module）** 为组织单元，模块内按职责拆分控制器、服务、网关与解析器：
 
-- `controller`：HTTP 端点，仅承载少量无法被 GraphQL 覆盖的 REST 端点（如健康检查、回调接收）
+- `controller`：HTTP 端点，承载少量无法被 GraphQL 覆盖的 REST 端点（如健康检查、回调接收）与 SSE 推送端点（`@Sse()`）
 - `gateway`：WebSocket 网关，管理连接生命周期、事件订阅与推送
 - `resolver`：GraphQL 解析器，编排查询与字段级数据获取
 - `service`：业务编排，调用下游 Spring 服务、读写缓存、发布事件
-- `provider`：横切能力（Guard / Interceptor / Pipe / Filter），HTTP、WebSocket、GraphQL 三种入口复用同一套
+- `provider`：横切能力（Guard / Interceptor / Pipe / Filter），HTTP、WebSocket、GraphQL 三种上下文复用同一套（SSE 属 HTTP 上下文）
 
 ```mermaid
 graph TD
@@ -165,6 +168,8 @@ bootstrap();
 ```bash
 # WebSocket（Socket.IO）
 pnpm add @nestjs/websockets @nestjs/platform-socket.io
+
+# SSE：NestJS 内置 @Sse()，无需额外依赖
 
 # GraphQL（Apollo Server + Fastify 集成）
 pnpm add @nestjs/graphql @nestjs/apollo @apollo/server @as-integrations/fastify graphql

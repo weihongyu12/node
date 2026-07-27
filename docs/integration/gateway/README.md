@@ -1,6 +1,6 @@
 ---
 title: 网关接入
-description: Spring Cloud Gateway 静态路由配置——REST、GraphQL 与 WebSocket 三类流量的路由、超时与重试策略
+description: Spring Cloud Gateway 静态路由配置——REST、GraphQL、WebSocket 与 SSE 四类流量的路由、超时与重试策略
 ---
 
 # 网关接入
@@ -17,6 +17,7 @@ Spring Cloud Gateway 作为统一入口，通过**静态路由**将不同流量�
 | `/api/health/**` | `realtime-service` (Node.js) | HTTP | 健康检查（也可直连） |
 | `/graphql` | `realtime-service` (Node.js) | HTTP | GraphQL 查询 |
 | `/socket.io/**` | `realtime-service` (Node.js) | WebSocket | Socket.IO 长连接 |
+| `/sse/**` | `realtime-service` (Node.js) | HTTP 长连接 | SSE 单向推送 |
 
 ## 配置示例
 
@@ -47,6 +48,14 @@ spring:
           filters:
             # WebSocket 不重试、不设短超时
             - name: StripPrefix=0
+
+        - id: realtime-sse
+          uri: http://realtime-service:3000
+          predicates:
+            - Path=/sse/**
+          metadata:
+            response-timeout: -1   # SSE 长连接禁用响应超时
+            connect-timeout: 5000
 
         - id: realtime-health
           uri: http://realtime-service:3000
@@ -141,6 +150,32 @@ spring:
 
 :::tip
 Sticky Session 只负责“连接归属”，跨实例的消息广播仍需 Redis Adapter，两者职责互补，见 [性能参考 · 水平扩展策略](../../reference/performance/README.md#水平扩展策略)。
+:::
+
+## SSE 路由要点
+
+SSE 是长连接 HTTP 响应（`text/event-stream`），网关配置介于普通 HTTP 与 WebSocket 之间：
+
+| 配置项 | 普通 HTTP / GraphQL | SSE |
+|--------|--------------------|-----|
+| `uri` scheme | `http://` | `http://` |
+| Retry | 允许 1-2 次 | **禁止**（断连由客户端自动重连恢复） |
+| Response Timeout | 3-10s | **禁用**（连接长期持有） |
+| 响应缓冲 | 默认 | **禁用**（缓冲会导致事件积压在网关） |
+| Sticky Session | 不需要 | 不需要（单请求长连接，无多次握手） |
+
+```yaml
+- id: realtime-sse
+  uri: http://realtime-service:3000
+  predicates:
+    - Path=/sse/**
+  metadata:
+    response-timeout: -1   # 禁用响应超时
+    connect-timeout: 5000
+```
+
+:::warning
+若网关联调时出现“事件批量延迟到达”而非实时下发，优先检查链路上的缓冲：Spring Cloud Gateway 默认不缓冲响应体，但前置的 Nginx / Ingress 需要显式 `X-Accel-Buffering: no`（或 `proxy_buffering off`）。
 :::
 
 ## 认证透传

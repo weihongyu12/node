@@ -39,6 +39,7 @@ graph TD
     GW -->|/api/devices/**| SP3
     GW -->|/graphql| NODE
     GW -->|/socket.io/| NODE
+    GW -->|/sse/**| NODE
     NODE -->|内部 REST| SP1
     NODE -->|内部 REST| SP2
     NODE -->|内部 REST| SP3
