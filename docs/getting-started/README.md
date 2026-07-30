@@ -64,21 +64,21 @@ graph TD
 
 | 类别 | 选型 |
 |------|------|
-| 运行时 | Node.js LTS（≥ 22） |
-| 框架 | NestJS |
-| HTTP 平台 | Fastify（`@nestjs/platform-fastify`） |
-| WebSocket | Socket.IO（`@nestjs/platform-socket.io`） |
-| SSE | NestJS 内置 `@Sse()`（`@nestjs/common`，无额外依赖） |
-| GraphQL | Apollo Server（`@nestjs/apollo` + `@as-integrations/fastify`） |
-| 语言 | TypeScript |
-| 认证 | JWT（`@nestjs/jwt`，与传统后端同源密钥 / JWKS） |
-| 参数校验 | class-validator + class-transformer |
-| 安全头 | `@fastify/helmet` |
-| 限流 | `@nestjs/throttler` |
-| 缓存 / 广播 | Redis（ioredis + `@socket.io/redis-adapter`） |
-| 消息队列 | Kafka（`@nestjs/microservices` / kafkajs） |
-| 日志 | nestjs-pino（pino，Fastify 原生日志器） |
-| 健康检查 | `@nestjs/terminus` |
+| 运行时 | [Node.js](https://nodejs.org/) LTS（≥ 22） |
+| 框架 | [NestJS](https://nestjs.com/) |
+| HTTP 平台 | [Fastify](https://fastify.dev/)（[`@nestjs/platform-fastify`](https://docs.nestjs.com/techniques/performance)） |
+| WebSocket | [Socket.IO](https://socket.io/)（[`@nestjs/platform-socket.io`](https://docs.nestjs.com/websockets/gateways)） |
+| SSE | NestJS 内置 [`@Sse()`](https://docs.nestjs.com/techniques/server-sent-events)（`@nestjs/common`，无额外依赖） |
+| GraphQL | [Apollo Server](https://www.apollographql.com/docs/apollo-server/)（[`@nestjs/apollo`](https://docs.nestjs.com/graphql/quick-start) + [`@as-integrations/fastify`](https://github.com/apollo-server-integrations/apollo-server-integration-fastify)） |
+| 语言 | [TypeScript](https://www.typescriptlang.org/) |
+| 认证 | [JWT](https://jwt.io/)（[`@nestjs/jwt`](https://github.com/nestjs/jwt)，与传统后端同源密钥 / JWKS） |
+| 参数校验 | [class-validator](https://github.com/typestack/class-validator) + [class-transformer](https://github.com/typestack/class-transformer) |
+| 安全头 | [`@fastify/helmet`](https://github.com/fastify/fastify-helmet) |
+| 限流 | [`@nestjs/throttler`](https://github.com/nestjs/throttler) |
+| 缓存 / 广播 | [Redis](https://redis.io/)（[ioredis](https://github.com/redis/ioredis) + [`@socket.io/redis-adapter`](https://socket.io/docs/v4/redis-adapter/)） |
+| 消息队列 | [Kafka](https://kafka.apache.org/)（[`@nestjs/microservices`](https://docs.nestjs.com/microservices/kafka) / [kafkajs](https://kafka.js.org/)） |
+| 日志 | [nestjs-pino](https://github.com/iamolegga/nestjs-pino)（[pino](https://github.com/pinojs/pino)，Fastify 原生日志器） |
+| 健康检查 | [`@nestjs/terminus`](https://docs.nestjs.com/recipes/terminus) |
 | 单元测试 | Jest |
 | 代码检查 | ESLint |
 | 部署 | Docker |
@@ -193,6 +193,7 @@ pnpm add @nestjs/config @nestjs/jwt class-validator class-transformer @nestjs/th
 
 ### 基础技术
 
+- **NestJS**：渐进式 Node.js 框架，提供模块化架构、依赖注入容器与装饰器元数据，统一组织控制器、网关与解析器
 - **TypeScript**：为 JS 提供静态类型，NestJS 的依赖注入与装饰器元数据建立在 TS 之上
 - **RxJS**：NestJS 内置的响应式编程库，用于事件流与异步编排
 
@@ -215,4 +216,3 @@ pnpm add @nestjs/config @nestjs/jwt class-validator class-transformer @nestjs/th
 | [@socket.io/redis-adapter](https://socket.io/docs/v4/redis-adapter/) | Socket.IO 多实例广播适配器 |
 | [nestjs-pino](https://github.com/iamolegga/nestjs-pino) | 结构化日志（pino） |
 | [dataloader](https://github.com/graphql/dataloader) | GraphQL N+1 查询批处理 |
-| [dayjs](https://day.js.org/zh-CN/) | 轻量化时间/日期处理 |
