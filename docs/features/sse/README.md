@@ -9,11 +9,7 @@ SSE（Server-Sent Events）是基于 HTTP 的服务端单向推送通道：客�
 
 ## 技术选型
 
-| 方案 | 结论 | 理由 |
-|------|------|------|
-| **NestJS `@Sse()`** | ✔️ 采用 | 框架内置，返回 RxJS `Observable` 即完成事件流对接，零额外依赖 |
-| 手写 `reply.raw` 流式响应 | 🔵 备选 | 可精细控制响应头与心跳，但需自行管理连接生命周期与序列化格式 |
-| 以 Socket.IO 承载单向推送 | ❌ | 单向场景引入完整 WebSocket 协议与客户端 SDK，收益不匹配 |
+NestJS `@Sse()`：框架内置，返回 RxJS `Observable` 即完成事件流对接，零额外依赖。
 
 ### 与 WebSocket 的职责划分
 
@@ -25,10 +21,6 @@ SSE（Server-Sent Events）是基于 HTTP 的服务端单向推送通道：客�
 | 房间 / 命名空间 | 无，需在流内按身份过滤 | 内置 |
 | 横切组件 | 与普通 REST 同属 HTTP 上下文 | WS 上下文，需适配 |
 | 适用场景 | 看板大屏、进度推送、低频通知 | 双向信令、订阅管理、高频推送 |
-
-:::tip
-约定：**单向、低频、无需确认**的推送走 SSE；**双向、房间化、高频**的推送走 Socket.IO。二者可并存，按业务域各取所需。
-:::
 
 ## 服务端实现
 
@@ -78,15 +70,12 @@ data: {"deviceId":"D-001","status":"online"}
 ```ts
 const eventSource = new EventSource('/sse/device-status');
 
-// 监听具名事件（对应服务端 type 字段）
 eventSource.addEventListener('device:status-changed', (event) => {
   console.log(JSON.parse(event.data));
 });
 
-// 断线后浏览器自动重连，无需手动实现退避
 eventSource.onerror = () => { /* 连接异常，等待自动重连 */ };
 
-// 主动关闭
 eventSource.close();
 ```
 
@@ -110,7 +99,6 @@ await fetchEventSource('/sse/device-status', {
   signal: ctrl.signal,
 });
 
-// 主动断开
 ctrl.abort();
 ```
 :::
@@ -126,7 +114,6 @@ import { finalize, map } from 'rxjs';
 streamStatus(@CurrentUser() user: AuthPayload): Observable<MessageEvent> {
   return this.deviceStatusService.stream(user.tenantId).pipe(
     map((status) => ({ type: 'device:status-changed', data: status })),
-    // 客户端断开、流完成或出错时均会执行
     finalize(() => this.deviceStatusService.releaseStream(user.tenantId)),
   );
 }
@@ -164,12 +151,7 @@ streamStatus(@CurrentUser() user: AuthPayload): Observable<MessageEvent> {
 
 ### 多实例推送
 
-SSE 没有类似 Socket.IO Redis Adapter 的跨实例广播机制，事件流只存在于本实例的连接上。按推送语义二选一：
-
-| 推送语义 | 策略 |
-|---------|------|
-| 状态广播类（全体连接接收同类事件） | 各实例以**独立 consumer group** 消费 Kafka，向本实例连接下发，天然水平扩展 |
-| 精准推送（指定用户 / 租户） | 经 Redis Pub/Sub 分发，各实例订阅后匹配本实例连接下发 |
+SSE 没有类似 Socket.IO Redis Adapter 的跨实例广播机制，事件流只存在于本实例的连接上。各实例以**独立 consumer group** 消费 Kafka，向本实例连接下发，天然水平扩展：
 
 ### 浏览器连接数限制
 

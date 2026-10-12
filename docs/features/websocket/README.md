@@ -12,11 +12,7 @@ WebSocket 是 Node.js 服务的核心职责：承接传统后端不擅长的海�
 
 ## 技术选型
 
-| 方案 | 结论 | 理由 |
-|------|------|------|
-| **Socket.IO**（`@nestjs/platform-socket.io`） | ✔️ 采用 | 自动降级（WebSocket → 长轮询）、房间/命名空间、ack 机制、生态成熟 |
-| 原生 `ws` | 🔵 备选 | 更轻量，但需自行实现心跳、重连、房间管理 |
-| 原生 WebSocket API | ❌ | 无降级与重连，移动端弱网环境体验差 |
+Socket.IO（`@nestjs/platform-socket.io`）：自动降级（WebSocket → 长轮询）、房间/命名空间、ack 机制、生态成熟。
 
 ```bash
 pnpm add @nestjs/websockets @nestjs/platform-socket.io
@@ -39,7 +35,7 @@ import { Server, Socket } from 'socket.io';
 
 @WebSocketGateway({
   namespace: 'notification',
-  cors: { origin: false }, // CORS 由全局统一配置，见安全基线
+  cors: { origin: false },
 })
 export class NotificationGateway {
   @WebSocketServer()
@@ -50,7 +46,6 @@ export class NotificationGateway {
     @MessageBody() data: SubscribeTopicDto,
     @ConnectedSocket() client: Socket,
   ) {
-    // 返回值通过 ack 回传给客户端
     return { code: 0, message: 'ok', data: { topic: data.topic } };
   }
 }
@@ -67,13 +62,12 @@ export class NotificationGateway {
 ```ts
 // modules/notification/notification.gateway.ts
 export class NotificationGateway implements OnGatewayConnection, OnGatewayDisconnect {
-  constructor(private readonly authService: AuthService) {}
+  constructor(private readonly jwtService: JwtService) {}
 
   async handleConnection(client: Socket): Promise<void> {
     try {
       const token = client.handshake.auth.token as string;
-      const payload = await this.authService.verifyToken(token);
-      // 用户身份写入 socket.data，后续事件直接取用
+      const payload = await this.jwtService.verifyAsync<AuthPayload>(token);
       client.data.userId = payload.sub;
       client.data.tenantId = payload.tenantId;
       await client.join(`tenant:${payload.tenantId}`);
@@ -83,7 +77,6 @@ export class NotificationGateway implements OnGatewayConnection, OnGatewayDiscon
   }
 
   handleDisconnect(client: Socket): void {
-    // 清理在线状态（如 presence 记录）
   }
 }
 ```
@@ -95,7 +88,7 @@ import { io } from 'socket.io-client';
 
 const socket = io('wss://api.example.com/notification', {
   auth: { token },
-  transports: ['websocket'], // 内网/现代浏览器可跳过轮询降级
+  transports: ['websocket'],
 });
 ```
 
@@ -112,7 +105,6 @@ const socket = io('wss://api.example.com/notification', {
 ```ts
 @SubscribeMessage('notification:mark-read')
 handleMarkRead(@MessageBody() data: MarkReadDto) {
-  // 返回值自动作为 acknowledgement 发送，仅一次
   return { code: 0, message: 'ok', data: { id: data.id } };
 }
 ```
@@ -120,7 +112,7 @@ handleMarkRead(@MessageBody() data: MarkReadDto) {
 ```ts
 // 客户端
 socket.emit('notification:mark-read', { id: 123 }, (res) => {
-  console.log(res.code); // 0
+  console.log(res.code);
 });
 ```
 
@@ -220,12 +212,8 @@ graph TD
 :::warning[配套要求：网关 / LB 必须开启 Sticky Session]
 Redis Adapter 只解决“跨实例消息可达”，不解决“连接归属”。Socket.IO 握手由多次 HTTP 请求组成（polling → upgrade），若网关轮询分发，握手请求落到不同实例会直接失败。多实例部署时必须同时满足：
 
-1. **网关 / 负载均衡 Sticky Session**：按客户端 IP 或 Cookie 将同一客户端固定到同一实例（K8s Service 配置 `sessionAffinity: ClientIP`，网关配置见 [网关接入 · WebSocket 路由要点](../../integration/gateway/README.md#websocket-路由要点)）
+1. **网关 / 负载均衡 Sticky Session**：按客户端 IP 或 Cookie 将同一客户端固定到同一实例（负载均衡层配置见 [网关接入 · WebSocket 路由要点](../../integration/gateway/README.md#websocket-路由要点)）
 2. **Redis Adapter**：跨实例广播寻址（本节）
-:::
-
-:::tip
-推送入口（`server.to(...).emit`）代码无需感知多实例——适配器层透明转发，业务代码与单实例写法一致。
 :::
 
 ## 心跳与超时
@@ -234,9 +222,9 @@ Socket.IO 内置 ping/pong 心跳，生产环境按弱网环境调整：
 
 ```ts
 @WebSocketGateway({
-  pingInterval: 25000,   // 服务端 ping 间隔（默认 25000ms）
-  pingTimeout: 20000,    // 等待 pong 超时（默认 20000ms）
-  connectTimeout: 10000, // 握手超时
+  pingInterval: 25000,
+  pingTimeout: 20000,
+  connectTimeout: 10000,
 })
 ```
 

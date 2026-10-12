@@ -12,11 +12,7 @@ GraphQL 承担 BFF（Backend for Frontend）职责：一个页面需要的多个
 
 ## 技术选型
 
-| 方案 | 结论 | 理由 |
-|------|------|------|
-| **Apollo Server**（`@nestjs/apollo`） | ✔️ 采用 | 生态成熟、文档完善、与 Fastify 有官方集成 |
-| Mercurius | 🔵 备选 | 性能更高，但生态与企业级特性（如 Federation 工具链）弱于 Apollo |
-| GraphQL Yoga | ❌ | NestJS 官方支持为第三方集成，长期维护性不确定 |
+Apollo Server（`@nestjs/apollo`）：生态成熟、文档完善、与 Fastify 有官方集成。
 
 ```bash
 pnpm add @nestjs/graphql @nestjs/apollo @apollo/server @as-integrations/fastify graphql
@@ -70,7 +66,6 @@ export class DashboardResolver {
 
   @ResolveField(() => [OrderSummary])
   async recentOrders(@Parent() dashboard: Dashboard): Promise<OrderSummary[]> {
-    // 字段级解析：按需触发，支持 DataLoader 批处理
     return this.dashboardService.loadRecentOrders(dashboard.tenantId);
   }
 }
@@ -86,7 +81,6 @@ export class DashboardService {
   ) {}
 
   async aggregate(tenantId: string): Promise<Dashboard> {
-    // 并行聚合多个下游接口，而非串行
     const [stats, notices, devices] = await Promise.all([
       this.springClient.getTenantStats(tenantId),
       this.springClient.getActiveNotices(tenantId),
@@ -110,7 +104,6 @@ export class OrderLoader {
   constructor(private readonly springClient: SpringApiClient) {}
 
   readonly byUser = new DataLoader<string, Order[]>(async (userIds) => {
-    // 一次批量调用替代 N 次单条查询
     const orders = await this.springClient.getOrdersByUserIds(userIds as string[]);
     return userIds.map((id) => orders.filter((o) => o.userId === id));
   });
@@ -183,22 +176,6 @@ GraphQLModule.forRoot<ApolloDriverConfig>({
 })
 ```
 
-## Subscription 的取舍
+## 不启用 Subscription
 
-GraphQL Subscription 基于 WebSocket，与 Socket.IO 网关能力重叠。本架构中的约定：
-
-- **高频、房间化、强连接管理**的推送 → Socket.IO 事件（主通道）
-- **低频、Schema 驱动、与查询语义一致**的订阅 → GraphQL Subscription（可选）
-
-生产环境如启用 Subscription，使用 `graphql-ws` 传输（`subscriptions-transport-ws` 已废弃）：
-
-```ts
-GraphQLModule.forRoot<ApolloDriverConfig>({
-  driver: ApolloDriver,
-  subscriptions: { 'graphql-ws': true },
-})
-```
-
-:::warning
-Subscription 与 Socket.IO 同时启用时，注意二者独立管理连接，鉴权、房间、限流逻辑需分别实现——优先评估是否可用 Socket.IO 统一承载。
-:::
+GraphQL Subscription 基于 WebSocket，与 Socket.IO 网关能力重叠。本架构的约定：**实时推送统一走 Socket.IO / SSE**，GraphQL 只承担读侧聚合，不承载订阅。写操作走 Spring REST，推送走 SSE。
