@@ -46,7 +46,6 @@ spring:
           predicates:
             - Path=/socket.io/**
           filters:
-            # WebSocket 不重试、不设短超时
             - name: StripPrefix=0
 
         - id: realtime-sse
@@ -54,7 +53,7 @@ spring:
           predicates:
             - Path=/sse/**
           metadata:
-            response-timeout: -1   # SSE 长连接禁用响应超时
+            response-timeout: -1
             connect-timeout: 5000
 
         - id: realtime-health
@@ -83,9 +82,12 @@ spring:
             - Path=/api/orders/**
 ```
 
-:::tip
-`uri: lb://` 表示走 Spring Cloud LoadBalancer（需注册中心）；`uri: http://` 为静态直连，Node.js 服务使用静态直连即可。
-:::
+服务侧存在多套对外前缀时（如 `api/v1` 与 `api/v2` 并存），`setGlobalPrefix` 支持数组，无需为每套前缀单独注册控制器：
+
+```ts
+// main.ts
+app.setGlobalPrefix(['api/v1', 'api/v2']);
+```
 
 ## WebSocket 路由要点
 
@@ -101,7 +103,6 @@ WebSocket 与 HTTP 路由的核心差异：
 | Sticky Session | 不需要 | **必须**（多实例时握手多请求须落到同一实例） |
 
 ```yaml
-# 网关 WebSocket 专项配置
 spring:
   cloud:
     gateway:
@@ -114,7 +115,7 @@ spring:
           predicates:
             - Path=/socket.io/**
           metadata:
-            response-timeout: -1   # 禁用响应超时
+            response-timeout: -1
             connect-timeout: 5000
 ```
 
@@ -124,33 +125,38 @@ Spring Cloud Gateway 默认的 `response-timeout` 与 `idle-timeout` 对 WebSock
 
 ### 多实例 Sticky Session
 
-Node.js 服务扩容到多实例后，Socket.IO 握手的多次请求（polling → upgrade）必须落到同一实例，否则握手失败。两种落地方式（按基础设施任选其一）：
+Node.js 服务扩容到多实例后，Socket.IO 握手的多次请求（polling → upgrade）必须落到同一实例，否则握手失败。在负载均衡层配置会话亲和（按客户端 IP 或 Cookie 保持），常见平台的对应配置：
 
-```yaml
-# 方式一（推荐）：K8s Service 层会话亲和，网关无需改动
-apiVersion: v1
-kind: Service
-metadata:
-  name: realtime-service
-spec:
-  sessionAffinity: ClientIP
-  sessionAffinityConfig:
-    clientIP:
-      timeoutSeconds: 10800
+| 平台 | 配置 |
+|------|------|
+| K8s Service | `sessionAffinity: ClientIP` |
+| Nginx | `ip_hash` 或 sticky cookie |
+| 云负载均衡 | 开启会话保持（目标组 / 后端服务属性） |
+
+### namespace 隔离与握手鉴权
+
+Socket.IO namespace 按业务域隔离（如设备控制 `device`、通知推送 `notification`），新业务域挂新 namespace，互不干扰。HTTP 握手仍走默认 path `/socket.io/`，namespace 经连接参数传递——网关只需一条 `/socket.io/**` 路由，多业务域不增加网关配置：
+
+```ts
+// ws/device.gateway.ts
+@WebSocketGateway({ namespace: 'device' })
+export class DeviceGateway implements OnGatewayConnection {
+  constructor(private readonly jwtService: JwtService) {}
+
+  /** 握手阶段鉴权：客户端 io(url, { auth: { token } }) 携带令牌 */
+  async handleConnection(client: Socket): Promise<void> {
+    const token = client.handshake.auth?.token;
+    try {
+      const user = await this.jwtService.verifyAsync<AuthPayload>(
+        typeof token === 'string' ? token : '',
+      );
+      Object.assign(client.data, { user });
+    } catch {
+      client.disconnect(true);
+    }
+  }
+}
 ```
-
-```yaml
-# 方式二：Spring Cloud LoadBalancer Cookie 亲和（走注册中心 lb:ws:// 时）
-spring:
-  cloud:
-    loadbalancer:
-      sticky-session:
-        add-service-instance-cookie: true
-```
-
-:::tip
-Sticky Session 只负责“连接归属”，跨实例的消息广播仍需 Redis Adapter，两者职责互补，见 [性能参考 · 水平扩展策略](../../reference/performance/README.md#水平扩展策略)。
-:::
 
 ## SSE 路由要点
 
@@ -162,6 +168,7 @@ SSE 是长连接 HTTP 响应（`text/event-stream`），网关配置介于普通
 | Retry | 允许 1-2 次 | **禁止**（断连由客户端自动重连恢复） |
 | Response Timeout | 3-10s | **禁用**（连接长期持有） |
 | 响应缓冲 | 默认 | **禁用**（缓冲会导致事件积压在网关） |
+| 空闲超时 | 默认 | **大于心跳间隔**（服务端周期下发心跳帧保活，见 [SSE · 心跳保活](../../features/sse/README.md#心跳保活)） |
 | Sticky Session | 不需要 | 不需要（单请求长连接，无多次握手） |
 
 ```yaml
@@ -170,7 +177,7 @@ SSE 是长连接 HTTP 响应（`text/event-stream`），网关配置介于普通
   predicates:
     - Path=/sse/**
   metadata:
-    response-timeout: -1   # 禁用响应超时
+    response-timeout: -1
     connect-timeout: 5000
 ```
 
@@ -180,73 +187,40 @@ SSE 是长连接 HTTP 响应（`text/event-stream`），网关配置介于普通
 
 ## 认证透传
 
-网关层完成 JWT 校验（Spring Security），透传身份信息给下游：
+采用 **Token 端到端透传**：统一认证服务签发 JWT（ES256），网关只做路由不做验签；Node.js 服务以公钥自行验签（实现见 [认证授权](../../features/authentication/README.md)），调用下游时把原始 `Authorization` 头透传，Spring 侧二次校验。每个下游独立验证凭据，不依赖上游信任链：
 
-```java
-// 网关过滤器示例（Spring）
-@Component
-public class AuthGlobalFilter implements GlobalFilter {
-    @Override
-    public Mono<Void> filter(ServerWebExchange exchange, GatewayFilterChain chain) {
-        String token = extractToken(exchange.getRequest());
-        AuthPayload payload = jwtVerifier.verify(token);
-        // 身份信息放入 Header，下游直接取用
-        ServerHttpRequest mutated = exchange.getRequest().mutate()
-            .header("X-User-Id", payload.getSub())
-            .header("X-Tenant-Id", payload.getTenantId())
-            .build();
-        return chain.filter(exchange.mutate().request(mutated).build());
-    }
-}
+```mermaid
+sequenceDiagram
+    participant C as 客户端
+    participant GW as 网关
+    participant N as Node.js 服务
+    participant SP as Spring 服务
+
+    C->>GW: 请求（Bearer Token）
+    GW->>N: 透传（不验签）
+    N->>N: 公钥验签，注入身份
+    N->>SP: 内部调用（原样透传 Authorization）
+    SP->>SP: 校验 Token
+    SP-->>N: 响应
+    N-->>GW: 响应
+    GW-->>C: 响应
 ```
-
-Node.js 服务从 Header 直接读取身份，无需重复验签（内网信任网关）：
 
 ```ts
-// common/middleware/trust-gateway.middleware.ts
-@Injectable()
-export class TrustGatewayMiddleware implements NestMiddleware {
-  use(req: FastifyRequest['raw'], res: FastifyReply['raw'], next: () => void) {
-    // 网关已验签，直接注入身份
-    req.user = {
-      sub: req.headers['x-user-id'],
-      tenantId: req.headers['x-tenant-id'],
-    };
-    next();
-  }
-}
+const order = await this.springClient.get(
+  'order',
+  `/internal/orders/${orderId}`,
+  { authorization: rawAuthorizationHeader },
+);
 ```
 
-:::tip
-若安全要求更高（零信任内网），Node.js 服务仍可独立验签（见 [认证授权](../../features/authentication/README.md)），与网关形成双重校验。
-:::
+- 令牌撤销、权限变更在下游即时生效（每个服务独立校验）
+- 审计链路完整：任一跳都能还原真实调用者
+- 验签公钥经环境变量注入（PEM），未配置时认证禁用——仅限本地开发
 
 ## 健康检查与摘除
 
-Node.js 服务暴露 `/api/health` 与 `/api/health/ready`，供网关与 K8s 探针使用：
-
-```ts
-// modules/health/health.controller.ts
-@Controller('api/health')
-export class HealthController {
-  constructor(private readonly health: HealthCheckService) {}
-
-  @Get()
-  @Public()
-  liveness() {
-    return { status: 'ok' };
-  }
-
-  @Get('ready')
-  @Public()
-  readiness() {
-    return this.health.check([
-      () => this.redis.pingCheck('redis'),
-      () => this.kafka.pingCheck('kafka'),
-    ]);
-  }
-}
-```
+Node.js 服务暴露 `/api/health`（存活）与 `/api/health/ready`（就绪），供网关与负载均衡探针使用，实现见 [可观测性 · 健康检查](../observability/README.md#健康检查)：
 
 - **存活探针**：仅确认进程运行，不检查依赖
 - **就绪探针**：确认 Redis、Kafka 等依赖可用，不可用则从负载均衡摘除

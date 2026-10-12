@@ -13,16 +13,17 @@ description: Node.js 服务的环境变量与模块配置参考——Fastify、S
 | `PORT` | ✔️ | `3000` | 服务监听端口 |
 | `REDIS_URL` | ✔️ | `redis://redis:6379` | Redis 连接地址 |
 | `KAFKA_BROKERS` | ✔️ | `kafka:9092` | Kafka broker 列表（逗号分隔） |
-| `SPRING_API_BASE_URL` | ✔️ | `http://spring-service:8080` | Spring 内部 API 基础地址 |
-| `SPRING_INTERNAL_TOKEN` | ✔️ | `internal-secret` | 内部调用令牌 |
-| `JWT_SECRET` | ✔️ | `your-256-bit-secret` | JWT 校验密钥（与 Spring 同源） |
+| `SPRING_USER_URL` | ✔️ | `http://user-service:8080` | Spring 用户服务内部地址 |
+| `SPRING_ORDER_URL` | ✔️ | `http://order-service:8080` | Spring 订单服务内部地址 |
+| `SPRING_DEVICE_URL` | ✔️ | `http://device-service:8080` | Spring 设备服务内部地址 |
+| `JWT_PUBLIC_KEY` | ✔️ | `-----BEGIN PUBLIC KEY-----\n...` | JWT 验签公钥（PEM，ES256，换行 `\n` 转义） |
 | `LOG_LEVEL` | 🔵 | `info` | 日志级别，默认 `info` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | 🔵 | `http://otel-collector:4318` | OpenTelemetry 导出地址 |
 | `THROTTLE_LIMIT_SHORT` | 🔵 | `10` | 短窗口限流阈值（次/秒） |
 | `THROTTLE_LIMIT_LONG` | 🔵 | `100` | 长窗口限流阈值（次/分钟） |
 
 :::warning
-敏感配置（密钥、令牌）通过 K8s Secret 或 Vault 注入，不写入代码仓库；`.env` 文件仅用于本地开发。
+敏感配置（密钥、令牌）通过部署平台的密钥机制（Secret / Vault）注入，不写入代码仓库；`.env` 文件仅用于本地开发。
 :::
 
 ## Fastify
@@ -32,10 +33,10 @@ description: Node.js 服务的环境变量与模块配置参考——Fastify、S
 const app = await NestFactory.create<NestFastifyApplication>(
   AppModule,
   new FastifyAdapter({
-    logger: false, // 使用 nestjs-pino 替代
-    bodyLimit: 1048576, // 1MB
-    connectionTimeout: 10000, // 10s
-    keepAliveTimeout: 72000, // 略大于网关/代理的 60s
+    logger: false,
+    bodyLimit: 1048576,
+    connectionTimeout: 10000,
+    keepAliveTimeout: 72000,
   }),
 );
 ```
@@ -55,8 +56,8 @@ const app = await NestFactory.create<NestFastifyApplication>(
   pingInterval: 25000,
   pingTimeout: 20000,
   connectTimeout: 10000,
-  maxHttpBufferSize: 1e6, // 1MB
-  cors: { origin: false }, // 全局 CORS 已配置，此处关闭
+  maxHttpBufferSize: 1e6,
+  cors: { origin: false },
 })
 ```
 

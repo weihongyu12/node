@@ -26,7 +26,7 @@ graph LR
 ```
 
 - **签发方唯一**：仅 Spring 认证服务可签发 JWT
-- **校验方式**：对称算法（HS256）共享密钥，或非对称算法（RS256）由 Node.js 拉取公钥（JWKS）
+- **校验方式**：非对称算法（ES256），Node.js 以公钥验签（环境变量注入 PEM），无私钥泄露面
 - **令牌内容**：`sub`（用户 ID）、`tenantId`（租户）、`roles`（角色）、`exp`（过期时间）
 
 :::warning
@@ -40,41 +40,29 @@ pnpm add @nestjs/jwt
 ```
 
 ```ts
-// infra/auth/auth.module.ts
+// common/auth/auth.module.ts
 import { JwtModule } from '@nestjs/jwt';
 
+@Global()
 @Module({
   imports: [
     JwtModule.registerAsync({
       useFactory: (config: ConfigService) => ({
-        // RS256 场景改为 jwksUri 拉取公钥
-        secret: config.get<string>('JWT_SECRET'),
-        signOptions: { expiresIn: '2h' },
+        publicKey: config.get<string>('JWT_PUBLIC_KEY')?.replaceAll(String.raw`\n`, '\n'),
+        verifyOptions: { algorithms: ['ES256'] },
       }),
       inject: [ConfigService],
     }),
   ],
-  providers: [AuthService],
-  exports: [AuthService],
+  exports: [JwtService],
 })
 export class AuthModule {}
 ```
 
-```ts
-// infra/auth/auth.service.ts
-@Injectable()
-export class AuthService {
-  constructor(private readonly jwtService: JwtService) {}
-
-  async verifyToken(token: string): Promise<AuthPayload> {
-    try {
-      return await this.jwtService.verifyAsync<AuthPayload>(token);
-    } catch {
-      throw new UnauthorizedException({ code: 40101, message: '令牌无效或已过期' });
-    }
-  }
-}
-```
+- 只配置 `publicKey`、不配置 `secret` / `privateKey`：服务仅具备验签能力，无法签发令牌
+- `algorithms: ['ES256']` 显式锁定验签算法，拒绝令牌自声明的算法（防 alg 混淆攻击）
+- 公钥经环境变量注入（PEM，换行 `\n` 转义）
+- 公钥未配置时认证禁用（Guard 注入匿名身份）——仅限本地开发，生产环境必须注入
 
 ## 四类入口统一鉴权
 
@@ -87,15 +75,29 @@ export class AuthService {
 // common/guards/jwt-auth.guard.ts
 @Injectable()
 export class JwtAuthGuard implements CanActivate {
-  constructor(private readonly authService: AuthService) {}
+  constructor(
+    private readonly jwtService: JwtService,
+    private readonly config: ConfigService,
+  ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
-    const request = this.getRequest(context);
-    const token = this.extractToken(request, context);
-    if (!token) throw new UnauthorizedException({ code: 40102, message: '缺少令牌' });
+    const type = context.getType<'http' | 'ws' | 'graphql'>();
+    const target = this.getRequest(context);
+    const token = this.extractToken(target, type);
 
-    const payload = await this.authService.verifyToken(token);
-    request.user = payload; // 注入身份，后续直接取用
+    let payload: AuthPayload;
+    if (this.config.get<string>('JWT_PUBLIC_KEY') === undefined) {
+      payload = ANONYMOUS_USER;
+    } else {
+      try {
+        payload = await this.jwtService.verifyAsync<AuthPayload>(token);
+      } catch {
+        throw new UnauthorizedException({ code: 40101, message: '令牌无效或已过期' });
+      }
+    }
+
+    if (type === 'ws') target.data.user = payload;
+    else target.user = payload;
     return true;
   }
 
@@ -106,10 +108,9 @@ export class JwtAuthGuard implements CanActivate {
     return context.switchToHttp().getRequest();
   }
 
-  private extractToken(request: any, context: ExecutionContext): string | undefined {
-    const type = context.getType<'http' | 'ws' | 'graphql'>();
-    if (type === 'ws') return request.handshake?.auth?.token;
-    const header = request.headers?.authorization;
+  private extractToken(target: any, type: string): string | undefined {
+    if (type === 'ws') return target.handshake?.auth?.token;
+    const header = target.headers?.authorization;
     return header?.startsWith('Bearer ') ? header.slice(7) : undefined;
   }
 }
@@ -121,6 +122,7 @@ export class JwtAuthGuard implements CanActivate {
 ```ts
 // app.module.ts
 @Module({
+  imports: [AuthModule],
   providers: [
     { provide: APP_GUARD, useClass: JwtAuthGuard },
   ],

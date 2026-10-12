@@ -23,13 +23,10 @@ pnpm add nestjs-pino pino-http
       useFactory: (config: ConfigService) => ({
         pinoHttp: {
           level: config.get('LOG_LEVEL', 'info'),
-          // 生产环境输出 JSON，由 Fluent Bit / Filebeat 采集
           transport: process.env.NODE_ENV !== 'production'
             ? { target: 'pino-pretty' }
             : undefined,
-          // 注入追踪 ID
           customProps: (req) => ({ traceId: req.id }),
-          // 脱敏
           redact: ['req.headers.authorization', 'req.headers.cookie'],
         },
       }),
@@ -67,10 +64,9 @@ pnpm add @fastify/metrics prom-client
 // main.ts
 import metricsPlugin from '@fastify/metrics';
 
-// NestFactory.create<NestFastifyApplication>(...) 之后、listen 之前
 await app.register(metricsPlugin, {
   endpoint: '/metrics',
-  defaultMetrics: { enabled: true }, // 进程级指标：CPU、内存、事件循环延迟
+  defaultMetrics: { enabled: true },
 });
 ```
 
@@ -96,10 +92,6 @@ export class MetricsService {
   });
 }
 ```
-
-:::tip[为什么不选 @willsoto/nestjs-prometheus]
-`@willsoto/nestjs-prometheus` 面向 Express 风格中间件设计，在 Fastify 适配器下自动 HTTP 指标采集存在兼容性缝隙；`@fastify/metrics` 直接挂钩 Fastify 生命周期（`onRequest`/`onResponse`），路由级指标零胶水代码。
-:::
 
 **核心指标清单**：
 
@@ -128,9 +120,9 @@ import { nodeProfilingIntegration } from '@sentry/profiling-node';
 Sentry.init({
   dsn: process.env.SENTRY_DSN,
   environment: process.env.NODE_ENV,
-  release: process.env.APP_VERSION, // CI 注入镜像 tag，错误回归可定位到具体发布
+  release: process.env.APP_VERSION,
   integrations: [nodeProfilingIntegration()],
-  tracesSampleRate: 0.1, // 与 OTel 采样率对齐
+  tracesSampleRate: 0.1,
   profilesSampleRate: 0.1,
 });
 ```
@@ -139,7 +131,6 @@ Sentry.init({
 // main.ts 第一行
 import './instrument';
 
-// 全局异常过滤器：未捕获异常自动上报
 app.useGlobalFilters(new SentryGlobalFilter()); // from '@sentry/nestjs/setup'
 ```
 
@@ -149,6 +140,24 @@ app.useGlobalFilters(new SentryGlobalFilter()); // from '@sentry/nestjs/setup'
 | 业务异常降噪 | 预期内的 4xx `HttpException` 在过滤器中过滤，只上报 5xx |
 | Sourcemap | CI 构建后经 `sentry-cli` 上传，堆栈还原为 TS 源码 |
 | 与日志关系 | Pino 记全量流水，Sentry 聚合异常——互补，不替代 |
+
+## 原生可观测性（@nestjs/observe）
+
+框架官方提供 [Observe](https://observe.nestjs.com/) SDK，经 `instrument` 应用选项挂接 Nest 自身的请求生命周期（而非通用 APM 对 HTTP server 打补丁），按控制器、Provider、Resolver、消费者粒度上报请求、任务、错误与链路；HTTP、GraphQL、gRPC、微服务传输、队列消费者与 cron 均自动覆盖：
+
+```bash
+pnpm add @nestjs/observe
+```
+
+```ts
+// app.module.ts
+import { createObserveModule } from '@nestjs/observe';
+
+export const { ObserveModule, ObserveInstrument } = createObserveModule();
+
+// main.ts
+const app = await NestFactory.create(AppModule, { instrument: ObserveInstrument });
+```
 
 ## OpenTelemetry 链路追踪
 
@@ -170,7 +179,7 @@ const sdk = new NodeSDK({
   }),
   instrumentations: [
     getNodeAutoInstrumentations({
-      '@opentelemetry/instrumentation-fs': { enabled: false }, // 减少噪音
+      '@opentelemetry/instrumentation-fs': { enabled: false },
     }),
   ],
 });
@@ -239,6 +248,10 @@ export class HealthController {
 |------|---------|---------|
 | 存活（Liveness） | 进程运行 | 重启容器 |
 | 就绪（Readiness） | Redis、Kafka 连通 | 从负载均衡摘除 |
+
+:::warning[Terminus 自定义指标迁移]
+旧 `HealthIndicator` 抽象（`extends HealthIndicator` + 抛出 `HealthCheckError` 报告异常态）已移除。自定义指标改为注入 `HealthIndicatorService`，以 `up()` / `down()` 显式报告状态，或用 `attempt()` 包装操作（操作抛错即标记 `down`）。内置指标（`redis.pingCheck` 等）不受影响。
+:::
 
 :::tip[告警建议]
 - `ws_connections_active` 突降 50%：连接风暴或实例故障
