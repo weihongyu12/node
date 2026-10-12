@@ -1,214 +1,159 @@
 ---
 title: CI/CD 与部署
-description: Node.js 服务的持续集成与容器化部署——GitHub Actions 流水线、Docker 多阶段构建与 K8s 部署清单
+description: Node.js 服务的持续集成与容器化部署——GitLab CI 流水线、Docker 多阶段构建与运行契约
 ---
 
 # CI/CD 与部署
 
 Node.js 服务与 Spring 服务共用同一套 CI/CD 平台，但流水线针对 Node.js 特性做适配。
 
-## CI 流水线（GitHub Actions）
+## CI 流水线（GitLab CI）
 
 ```yaml
-# .github/workflows/ci.yml
-name: CI
+# .gitlab-ci.yml
+stages: [lint, test, package]
 
-on:
-  push:
-    branches: [develop, main]
-  pull_request:
-    branches: [develop, main]
+default:
+  image: node:lts
 
-jobs:
-  lint:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 9
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm run lint
-      - run: pnpm run typecheck
+variables:
+  PNPM_HOME: "$CI_PROJECT_DIR/.pnpm"
 
-  test:
-    runs-on: ubuntu-latest
-    services:
-      redis:
-        image: redis:7
-        ports: ['6379:6379']
-      kafka:
-        image: bitnami/kafka:3.7
-        ports: ['9092:9092']
-        env:
-          KAFKA_CFG_NODE_ID: 0
-          KAFKA_CFG_PROCESS_ROLES: controller,broker
-          KAFKA_CFG_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
-          KAFKA_CFG_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
-          KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
-          KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: 0@localhost:9093
-          KAFKA_CFG_CONTROLLER_LISTENER_NAMES: CONTROLLER
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 9
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm run test
-      - run: pnpm run test:e2e
-      - run: pnpm audit --audit-level=high
+.pnpm: &pnpm
+  before_script:
+    - export PATH="$PNPM_HOME/bin:$PATH"
+    - curl -fsSL https://get.pnpm.io/install.sh | sh -
+    - pnpm config set store-dir .pnpm-store
+    - pnpm install --frozen-lockfile
+  cache:
+    key:
+      files:
+        - pnpm-lock.yaml
+    paths:
+      - .pnpm-store
 
-  build:
-    needs: [lint, test]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
-        with:
-          registry: registry.example.com
-          username: ${{ secrets.REGISTRY_USER }}
-          password: ${{ secrets.REGISTRY_PASS }}
-      - uses: docker/build-push-action@v6
-        with:
-          context: .
-          push: true
-          tags: |
-            registry.example.com/realtime-service:${{ github.sha }}
-            registry.example.com/realtime-service:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "develop"
+    - if: $CI_COMMIT_BRANCH == "main"
+
+lint:
+  stage: lint
+  <<: *pnpm
+  script:
+    - pnpm run lint
+    - pnpm run typecheck
+
+test:
+  stage: test
+  services:
+    - name: redis:7
+      alias: redis
+    - name: apache/kafka:4.3.1
+      alias: kafka
+      variables:
+        KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+  variables:
+    REDIS_URL: redis://redis:6379
+    KAFKA_BROKERS: kafka:9092
+  <<: *pnpm
+  script:
+    - pnpm run test
+    - pnpm run test:e2e
+    - pnpm audit --audit-level=high
+
+package:
+  stage: package
+  image: docker:29
+  services:
+    - name: docker:29-dind
+      alias: docker
+  variables:
+    DOCKER_HOST: tcp://docker:2376
+    DOCKER_TLS_CERTDIR: /certs
+    IMAGE_TAG: $CI_REGISTRY_IMAGE:$CI_COMMIT_SHA
+  before_script:
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+    - docker pull $CI_REGISTRY_IMAGE:latest || true
+  script:
+    - docker build
+      --cache-from $CI_REGISTRY_IMAGE:latest
+      --tag $IMAGE_TAG
+      --tag $CI_REGISTRY_IMAGE:latest
+      .
+    - docker push $IMAGE_TAG
+    - docker push $CI_REGISTRY_IMAGE:latest
 ```
 
-## Docker 多阶段构建
+## 多阶段构建（Dockerfile）
+
+构建在 Dockerfile 内完成（[Docker 官方最佳实践](https://docs.docker.com/build/building/best-practices/)第一条），`docker build` 一条命令从源码到镜像——builder 阶段编译并裁剪生产依赖，runner 阶段只 COPY 产物，最终镜像不含源码与构建工具链：
 
 ```dockerfile
 # Dockerfile
-# ---------- 构建阶段 ----------
-FROM node:22-alpine AS builder
+# ---------- builder ----------
+FROM node:lts AS builder
 WORKDIR /app
-RUN corepack enable
 
 COPY package.json pnpm-lock.yaml ./
-RUN pnpm install --frozen-lockfile
+RUN corepack enable && pnpm install --frozen-lockfile
 
 COPY . .
 RUN pnpm run build && pnpm prune --prod
 
-# ---------- 运行阶段 ----------
-FROM node:22-alpine AS runner
+# ---------- runner ----------
+FROM node:lts AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production
-RUN addgroup -g 1001 -S nodejs && adduser -S nestjs -u 1001
 
-COPY --from=builder --chown=nestjs:nodejs /app/node_modules ./node_modules
-COPY --from=builder --chown=nestjs:nodejs /app/dist ./dist
-COPY --from=builder --chown=nestjs:nodejs /app/package.json ./
+COPY --from=builder --chown=node:node /app/package.json ./
+COPY --from=builder --chown=node:node /app/node_modules ./node_modules
+COPY --from=builder --chown=node:node /app/dist ./dist
 
-USER nestjs
+USER node
 EXPOSE 3000
 
-# 优雅停机：先停接新连接，再处理存量请求，最后退出
 CMD ["node", "dist/main.js"]
 ```
 
-**镜像优化要点**：
+**镜像要点**：
 
-- 基础镜像使用 `alpine`，最终镜像 ≤ 200MB
-- 生产依赖与构建依赖分离，`pnpm prune --prod` 剔除 devDependencies
-- 非 root 用户运行，降低容器逃逸风险
+- 多阶段分离：最终镜像不含源码、构建工具链与 devDependencies，只打包 `dist` 与生产依赖（`pnpm prune --prod` 在 builder 内完成）
+- 依赖清单（`package.json` + `pnpm-lock.yaml`）先于源码 COPY：依赖未变时 `pnpm install` 层直接命中缓存，源码改动不触发依赖重装
+- 以基础镜像内置 `node` 用户（非 root）运行
+- `node:lts` 满足框架运行要求（≥ 20.19 / 22.12，建议 Active LTS）
 
-## 部署清单（K8s）
+构建上下文排除无关文件，缩减传输与缓存失效面：
 
-```yaml
-# k8s/deployment.yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: realtime-service
-spec:
-  replicas: 3
-  selector:
-    matchLabels:
-      app: realtime-service
-  template:
-    metadata:
-      labels:
-        app: realtime-service
-    spec:
-      containers:
-        - name: realtime-service
-          image: registry.example.com/realtime-service:latest
-          ports:
-            - containerPort: 3000
-          env:
-            - name: NODE_ENV
-              value: production
-            - name: PORT
-              value: "3000"
-            - name: REDIS_URL
-              valueFrom:
-                secretKeyRef:
-                  name: realtime-secrets
-                  key: redis-url
-            - name: JWT_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: realtime-secrets
-                  key: jwt-secret
-          resources:
-            requests:
-              memory: "256Mi"
-              cpu: "250m"
-            limits:
-              memory: "512Mi"
-              cpu: "500m"
-          livenessProbe:
-            httpGet:
-              path: /api/health
-              port: 3000
-            initialDelaySeconds: 10
-            periodSeconds: 30
-          readinessProbe:
-            httpGet:
-              path: /api/health/ready
-              port: 3000
-            initialDelaySeconds: 5
-            periodSeconds: 10
-          lifecycle:
-            preStop:
-              exec:
-                command: ["sh", "-c", "sleep 5"] # 等待连接 draining
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: realtime-service
-spec:
-  selector:
-    app: realtime-service
-  ports:
-    - port: 3000
-      targetPort: 3000
+```
+# .dockerignore
+.git
+.env*
+node_modules
+dist
+*.log
+*.md
+coverage
+test
 ```
 
-**部署要点**：
+## 运行与探活
 
-| 项 | 配置 | 理由 |
-|---|------|------|
-| 副本数 | ≥ 3 | WebSocket 场景单实例故障影响大 |
-| 就绪探针 | `/api/health/ready` | 依赖（Redis/Kafka）未就绪不接流 |
-| 优雅停机 | `preStop` sleep + `enableShutdownHooks` | 先停止接新连接，处理完存量再退出 |
-| 资源限制 | memory 512Mi / cpu 500m | Node.js 单实例内存敏感，避免 OOMKill |
+镜像推送到仓库后，部署编排由运维侧统一承接（容器平台、编排工具不在本文档范围），应用侧需履行的契约：
+
+| 契约 | 实现 | 说明 |
+|------|------|------|
+| 健康端点 | `GET /api/health`、`GET /api/health/ready` | 存活探针只确认进程运行；就绪探针确认 Redis / Kafka 依赖可用，未就绪不接流 |
+| 优雅停机 | `enableShutdownHooks` + 响应 SIGTERM | 收到停止信号：先停接新连接 → 处理存量请求 → 关闭 WS 连接与 Kafka 消费者 → 退出 |
+| 环境变量 | `NODE_ENV=production`、连接串、`JWT_PUBLIC_KEY` | 经部署平台密钥机制注入，不硬编码、不入镜像 |
+| 镜像 tag | `CI_COMMIT_SHA`（不可变） | 部署可追溯到具体提交，回滚切回任意历史版本；`:latest` 漂移不可控 |
+| 副本数 | ≥ 3 | WebSocket 场景单实例故障影响大，多实例水平分摊连接 |
+
+:::tip[参见]
+探活端点实现见 [可观测性 · 健康检查](../../integration/observability/README.md#健康检查)；优雅停机实现见下节。
+:::
 
 ## 优雅停机
 
@@ -220,12 +165,11 @@ async function bootstrap() {
     new FastifyAdapter(),
   );
 
-  // 收到 SIGTERM 时：先停止接新请求 → 关闭 WS 连接 → 关闭 Kafka 消费者 → 退出
   app.enableShutdownHooks();
 
   await app.listen(process.env.PORT ?? 3000, '0.0.0.0');
 }
 ```
 
-- K8s `terminationGracePeriodSeconds` 建议 ≥ 30s，覆盖 `preStop` + 连接 draining
+- 部署平台的宽限期建议 ≥ 30s，覆盖停止信号传播与存量请求 draining
 - Socket.IO 客户端实现自动重连，实例滚动更新时用户体验无感

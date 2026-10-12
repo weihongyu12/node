@@ -72,73 +72,16 @@ SWC 只转译、不校验类型，类型错误会被静默放过。两条防线�
 
 ## 开发模式
 
-| 模式 | 命令 | 特点 | 适用 |
-|------|------|------|------|
-| 默认 watch | `nest start --watch` | tsc 增量编译，零额外依赖，偏慢 | 小项目起步 |
-| **SWC watch（推荐）** | `nest start -b swc --watch --type-check` | 保存即整进程重启，毫秒级 | 日常开发 |
-| Webpack HMR | `pnpm run start:hot` | 模块级热替换，保留进程内存状态 | 调试长流程（如 WS 会话） |
-
-### Webpack HMR（可选）
+日常开发使用 **SWC watch**：保存即整进程重启，毫秒级。
 
 ```bash
-pnpm add -D webpack webpack-cli webpack-node-externals run-script-webpack-plugin
+nest start -b swc --watch --type-check
 ```
-
-```js
-// webpack-hmr.config.js
-const nodeExternals = require('webpack-node-externals');
-const { RunScriptWebpackPlugin } = require('run-script-webpack-plugin');
-
-module.exports = function hmrConfig(options, webpack) {
-  return {
-    ...options,
-    entry: ['webpack/hot/poll?100', options.entry],
-    externals: [
-      nodeExternals({
-        allowlist: ['webpack/hot/poll?100'],
-      }),
-    ],
-    plugins: [
-      ...options.plugins,
-      new webpack.HotModuleReplacementPlugin(),
-      new webpack.WatchIgnorePlugin({
-        paths: [/\.js$/, /\.d\.ts$/],
-      }),
-      new RunScriptWebpackPlugin({ name: options.output.filename }),
-    ],
-  };
-};
-```
-
-```ts
-// main.ts 末尾
-declare const module: {
-  hot?: { accept: () => void; dispose: (callback: () => Promise<void>) => void };
-};
-
-if (module.hot) {
-  module.hot.accept();
-  module.hot.dispose(() => app.close());
-}
-```
-
-```json
-// package.json
-{
-  "scripts": {
-    "start:hot": "nest build --webpack --webpackPath webpack-hmr.config.js --watch"
-  }
-}
-```
-
-:::tip[选型建议]
-日常开发用 **SWC watch**——无状态服务整进程毫秒级重启已足够快；只有调试需要保留内存状态的长流程（WebSocket 连接会话、大对象缓存预热）时才上 Webpack HMR。两套构建器**互斥**，不要混用。
-:::
 
 ## 与 CI / Docker 的关系
 
-CI 与镜像构建统一走 `pnpm run build`（即 `nest build -b swc`）：
+镜像构建走 Docker 多阶段（builder 阶段执行 `pnpm run build`，即 `nest build -b swc`），CI 只触发 `docker build`：
 
-- 构建提速直接缩短流水线时间，见 [CI/CD](../cicd/README.md)
+- 构建提速直接缩短镜像构建时间，见 [CI/CD](../cicd/README.md)
 - 类型安全由独立的 `typecheck` 阶段兜底，不依赖构建器
-- 产物为 CommonJS（NestJS 默认），`node dist/main.js` 启动，与 [Docker 多阶段构建](../cicd/README.md#docker-多阶段构建) 无额外适配
+- 产物为 CommonJS（NestJS 默认），`node dist/main.js` 启动，与 [多阶段构建](../cicd/README.md#多阶段构建dockerfile) 的 runner 阶段无额外适配
