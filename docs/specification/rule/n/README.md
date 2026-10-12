@@ -23,7 +23,6 @@ export default [
   node.configs['flat/recommended-module'],
   {
     rules: {
-      // Node 插件在 TS 环境下的路径兼容（由 tsc 与 importX 接管）
       'n/no-missing-import': 'off',
       'n/no-unpublished-import': 'off',
     },

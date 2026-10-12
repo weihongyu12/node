@@ -14,32 +14,43 @@ import TabItem from '@theme/TabItem';
 
 | 层级 | 范围 | 工具 | 覆盖率目标 |
 |------|------|------|-----------|
-| 单元测试 | service / provider / 工具函数 | Jest | 核心 service ≥ 80% |
-| 集成测试 | 网关 → service → 下游 mock | Jest + supertest | 关键 API 全通过 |
-| E2E 测试 | 完整容器环境（真实 Redis/Kafka） | Jest + supertest | 核心用户旅程全通过 |
-
-:::tip
-不追求 100% 覆盖率，优先保障：鉴权逻辑、限流逻辑、消息推送路径、GraphQL 聚合编排。
-:::
+| 单元测试 | service / provider / 工具函数 | Vitest | 核心 service ≥ 80% |
+| 集成测试 | 网关 → service → 下游 mock | Vitest + Fastify inject | 关键 API 全通过 |
+| E2E 测试 | 完整容器环境（真实 Redis/Kafka） | Vitest + Fastify inject | 核心用户旅程全通过 |
 
 ## 单元测试
 
 ```bash
-pnpm add -D jest @types/jest ts-jest @nestjs/testing
+pnpm add -D vitest vite-tsconfig-paths @vitest/coverage-v8 @nestjs/testing
+```
+
+```ts
+// vitest.config.ts
+import { defineConfig } from 'vitest/config';
+import tsconfigPaths from 'vite-tsconfig-paths';
+
+export default defineConfig({
+  plugins: [tsconfigPaths()],
+  test: {
+    globals: true,
+    include: ['**/*.spec.ts'],
+  },
+});
+```
+
+`globals: true` 时在 `tsconfig.json` 补充全局类型声明：
+
+```json
+{ "compilerOptions": { "types": ["vitest/globals"] } }
 ```
 
 ```json
-// package.json
+// package.json scripts
 {
-  "jest": {
-    "moduleFileExtensions": ["js", "json", "ts"],
-    "rootDir": "src",
-    "testRegex": ".*\\.spec\\.ts$",
-    "transform": { "^.+\\.(t|j)s$": "ts-jest" },
-    "collectCoverageFrom": ["**/*.(t|j)s"],
-    "coverageDirectory": "../coverage",
-    "testEnvironment": "node"
-  }
+  "test": "vitest run",
+  "test:watch": "vitest",
+  "test:cov": "vitest run --coverage",
+  "test:e2e": "vitest run --config ./vitest.config.e2e.ts"
 }
 ```
 
@@ -50,7 +61,7 @@ pnpm add -D jest @types/jest ts-jest @nestjs/testing
 // modules/notification/notification.service.spec.ts
 describe('NotificationService', () => {
   let service: NotificationService;
-  let springClient: jest.Mocked<SpringApiClient>;
+  let springClient: SpringApiClient;
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -58,7 +69,7 @@ describe('NotificationService', () => {
         NotificationService,
         {
           provide: SpringApiClient,
-          useValue: { getTenantStats: jest.fn() },
+          useValue: { getTenantStats: vi.fn() },
         },
       ],
     }).compile();
@@ -68,7 +79,7 @@ describe('NotificationService', () => {
   });
 
   it('聚合租户通知数据', async () => {
-    springClient.getTenantStats.mockResolvedValue({ unread: 5 });
+    vi.mocked(springClient.getTenantStats).mockResolvedValue({ unread: 5 });
     const result = await service.aggregate('tenant-1');
     expect(result.unread).toBe(5);
   });
@@ -82,28 +93,29 @@ describe('NotificationService', () => {
 // common/guards/jwt-auth.guard.spec.ts
 describe('JwtAuthGuard', () => {
   let guard: JwtAuthGuard;
-  let authService: jest.Mocked<AuthService>;
+  let jwtService: JwtService;
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         JwtAuthGuard,
-        { provide: AuthService, useValue: { verifyToken: jest.fn() } },
+        { provide: JwtService, useValue: { verifyAsync: vi.fn() } },
+        { provide: ConfigService, useValue: { get: vi.fn().mockReturnValue('pem') } },
       ],
     }).compile();
 
     guard = module.get(JwtAuthGuard);
-    authService = module.get(AuthService);
+    jwtService = module.get(JwtService);
   });
 
   it('有效令牌放行', async () => {
-    authService.verifyToken.mockResolvedValue({ sub: 'user-1', tenantId: 't-1' });
+    vi.mocked(jwtService.verifyAsync).mockResolvedValue({ sub: 'user-1', tenantId: 't-1' });
     const context = createMockExecutionContext({ headers: { authorization: 'Bearer valid' } });
     await expect(guard.canActivate(context)).resolves.toBe(true);
   });
 
   it('无效令牌拒绝', async () => {
-    authService.verifyToken.mockRejectedValue(new Error('expired'));
+    vi.mocked(jwtService.verifyAsync).mockRejectedValue(new Error('expired'));
     const context = createMockExecutionContext({ headers: { authorization: 'Bearer invalid' } });
     await expect(guard.canActivate(context)).rejects.toThrow(UnauthorizedException);
   });
@@ -117,11 +129,25 @@ describe('JwtAuthGuard', () => {
 
 - 下游 HTTP 调用（SpringApiClient）必须 mock，不发起真实网络请求
 - Redis 操作使用 `ioredis-mock` 或内存实现，不连接真实 Redis
-- Kafka 事件使用 `@nestjs/microservices` 的 `ClientKafka` mock
+- Kafka 事件（kafkajs）mock 处理器注册或 Producer，不连接真实 broker
 
 ## E2E 测试
 
-E2E 测试在独立容器中运行，连接真实 Redis 与 Kafka（Docker Compose 编排）：
+E2E 测试在独立容器中运行，连接真实 Redis 与 Kafka（Docker Compose 编排）。独立的 `vitest.config.e2e.ts` 与单元测试隔离（不同 include 模式，可独立编排执行时机）：
+
+```ts
+// vitest.config.e2e.ts
+import { defineConfig } from 'vitest/config';
+import tsconfigPaths from 'vite-tsconfig-paths';
+
+export default defineConfig({
+  plugins: [tsconfigPaths()],
+  test: {
+    globals: true,
+    include: ['test/**/*.e2e-spec.ts'],
+  },
+});
+```
 
 ```ts
 // test/app.e2e-spec.ts
@@ -162,12 +188,7 @@ describe('AppController (e2e)', () => {
       expect(JSON.parse(res.payload).data.dashboard).toBeDefined();
     });
   });
-});
 ```
-
-:::tip[Fastify 适配]
-E2E 测试使用 Fastify 的 `inject` 方法（无需启动监听端口），比 supertest 更轻量。`app.inject` 是 `NestFastifyApplication` 的扩展，来自 `fastify.inject`。
-:::
 
 ## 测试数据管理
 

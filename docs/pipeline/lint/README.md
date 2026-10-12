@@ -35,27 +35,22 @@ import tseslint from 'typescript-eslint';
 export default tseslint.config(
   { ignores: ['dist/**', 'coverage/**', 'eslint.config.mjs'] },
   eslint.configs.recommended,
-  // 代码风格
   plugins.stylistic,
-  // import 解析与排序
   plugins.importX,
-  // Airbnb base
   ...configs.base.recommended,
   unicorn.configs.recommended,
   promise.configs['flat/recommended'],
   regexp.configs.recommended,
   comments.recommended,
   ...jsdoc.configs['flat/recommended-typescript'],
-  // TypeScript
   plugins.typescriptEslint,
   ...configs.base.typescript,
   ...tseslint.configs.recommendedTypeChecked,
-  // Node.js 平台与安全
   ...node.configs['flat/recommended-module'],
   security.configs.recommended,
   {
     languageOptions: {
-      globals: { ...globals.node, ...globals.jest },
+      globals: { ...globals.node, ...globals.vitest },
       sourceType: 'module',
       parserOptions: {
         projectService: true,
@@ -65,21 +60,17 @@ export default tseslint.config(
   },
   {
     rules: {
-      // Unicorn 规则修正
       'unicorn/prevent-abbreviations': 'off',
       'unicorn/no-array-for-each': 'off',
       'unicorn/no-array-reduce': 'off',
       'unicorn/no-null': 'off',
 
-      // Node 插件在 TS 环境下的路径兼容（由 tsc 与 importX 接管）
       'n/no-missing-import': 'off',
       'n/no-unpublished-import': 'off',
 
-      // NestJS 专属框架适配（Module/Guard 等空壳类、装饰器注入）
       'class-methods-use-this': 'off',
       '@typescript-eslint/no-extraneous-class': 'off',
 
-      // TypeScript 严格度针对服务端开发微调
       '@typescript-eslint/no-explicit-any': 'off',
       '@typescript-eslint/no-floating-promises': 'warn',
       '@typescript-eslint/no-unsafe-argument': 'warn',
@@ -88,12 +79,10 @@ export default tseslint.config(
 );
 ```
 
-:::tip[配置要点]
-- **Node.js 平台规则**：`eslint-plugin-n` 的 `flat/recommended-module` 预设，详见 [Node.js 规则](../../specification/rule/n/README.md)
-- **安全规则**：`eslint-plugin-security` 的 `recommended` 预设（全部为 `warn`），详见 [安全规则](../../specification/rule/security/README.md)
-- **编码规范**：规则对应的编码实践见 [Node.js 规范](../../specification/code/node/README.md)
-- `recommended-module` 视所有文件为 ES Module；若项目编译为 CommonJS，改用 `recommended-script`
-- `n/no-missing-import`、`n/no-unpublished-import` 在 TS 项目关闭：`@/` 别名与 `.ts` 扩展解析超出插件静态分析能力，由 `tsc` 与 `importX` 接管
+:::tip[参见]
+- [Node.js 规则](../../specification/rule/n/README.md)：`eslint-plugin-n` 平台规则
+- [安全规则](../../specification/rule/security/README.md)：`eslint-plugin-security` 安全规则
+- [Node.js 规范](../../specification/code/node/README.md)：规则对应的编码实践
 :::
 
 :::warning[NestJS 与类型检查的平衡]
