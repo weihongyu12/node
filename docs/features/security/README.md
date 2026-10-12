@@ -10,32 +10,71 @@ import TabItem from '@theme/TabItem';
 
 Node.js 服务与传统后端执行**同一套**安全标准，不因“补充”定位而降低要求。
 
-## 安全头（Helmet）
+## 安全头
 
-Fastify 平台使用 `@fastify/helmet`（非 Express 的 `helmet`）：
-
-```bash
-pnpm add @fastify/helmet
-```
+框架内置安全响应头能力（`app.useSecurityHeaders()`）：默认值与 Helmet 8 一致，Express / Fastify 行为相同，零第三方依赖。紧跟 `NestFactory.create()` 之后、`listen()` 之前调用：
 
 ```ts
 // main.ts
-import helmet from '@fastify/helmet';
+const app = await NestFactory.create<NestFastifyApplication>(
+  AppModule,
+  new FastifyAdapter(),
+);
+app.useSecurityHeaders();
+await app.listen(...);
+```
 
-await app.register(helmet, {
+默认输出 `Content-Security-Policy`、`Strict-Transport-Security`、`X-Content-Type-Options`、`X-Frame-Options`、`Referrer-Policy` 等一组头，并移除 `X-Powered-By`。头部覆盖**所有**响应——路由响应、404、异常、CSRF 拒绝响应与 SSE 流。
+
+按头定制（选项名与 Helmet 一致，每个头接受 `false` 不输出 / `true` 默认值 / 配置对象）：
+
+```ts
+app.useSecurityHeaders({
   contentSecurityPolicy: {
+    useDefaults: true,
     directives: {
-      defaultSrc: ["'self'"],
-      scriptSrc: ["'self'"],
-      // GraphQL 端点如需 GraphiQL，单独放宽该路径
+      scriptSrc: ["'self'", "'unsafe-inline'", 'https://unpkg.com'],
     },
   },
-  crossOriginEmbedderPolicy: false, // 允许跨域嵌入（WebSocket 场景需要）
+  crossOriginEmbedderPolicy: false,
 });
 ```
 
-- 默认开启 XSS 过滤、MIME 嗅探防护、点击劫持防护
-- GraphQL 端点的 CSP 单独配置，避免阻断 GraphiQL 资源加载
+- 配置在调用时校验，错误配置启动即失败（含 Helmet legacy 选项名拒绝，如 `hsts` → `strictTransportSecurity`）
+- CSP 指令**替换**同名默认值，保留 `'self'` 需显式声明；`null` 删除指令；`reportOnly: true` 输出 Report-Only 头，先观察再收紧
+- 路由级仍可用 `@Header()` 覆盖单个头（如放行图片跨域加载）
+
+## CSRF 防护
+
+框架内置基于 Fetch Metadata 的 CSRF 防护（`app.enableCsrfProtection()`）：非令牌方案，无 cookie/session 前置、无客户端改造，Express / Fastify 行为相同：
+
+```ts
+// main.ts（紧跟 NestFactory.create() 之后调用）
+app.enableCsrfProtection({
+  trustedOrigins: ['https://admin.example.com'],
+  exclude: [{ path: 'webhooks/stripe', method: RequestMethod.POST }],
+});
+```
+
+判定规则（在中间件、守卫、处理器之前执行，未匹配路由同样受检）：
+
+| 请求 | 判定 |
+|------|------|
+| GET / HEAD / OPTIONS | 始终放行 |
+| 携带 `Sec-Fetch-Site` | 须为 `same-origin` / `none`；`same-site` 与 `cross-site` 拒绝 |
+| `Sec-Fetch-Site` 与 `Origin` 均无（非浏览器客户端） | 放行 |
+| 仅 `Origin`（旧浏览器） | `Origin` 主机须与请求 `Host` 一致（`X-Forwarded-Host` 不参与） |
+
+- 拒绝统一抛 `ForbiddenException`，经全局异常 Filter 塑形 403
+- `trustedOrigins` 条目为 `scheme://host[:port]`，不带路径；CORS 白名单**不自动**成为信任来源
+- `exclude` 声明方式同 `MiddlewareConsumer.exclude()`，全局前缀在初始化时自动拼接
+- WebSocket 握手不在检查范围，Gateway 侧自行校验 `Origin`（见 [WebSocket · 连接鉴权](../websocket/README.md#连接鉴权)）
+
+:::warning[代理链路注意]
+`X-Forwarded-Host` 被忽略：网关 / 反向代理改写 `Host` 头时，不发送 `Sec-Fetch-Site` 的旧浏览器会命中回退规则收到 403——配置代理保留原始 `Host`，或将对外域名加入 `trustedOrigins`。
+:::
+
+本服务 API 以 Bearer Token 鉴权、无 Cookie 会话，非浏览器客户端（App、服务间调用）天然免检——内置防护作为浏览器接入场景（Web 管理端、GraphiQL）的纵深防御层。
 
 ## CORS
 
@@ -128,9 +167,9 @@ export class WsThrottlerGuard implements CanActivate {
     {
       provide: APP_PIPE,
       useValue: new ValidationPipe({
-        whitelist: true,        // 剥离未声明属性
-        forbidNonWhitelisted: true, // 未声明属性直接拒绝
-        transform: true,        // 自动类型转换
+        whitelist: true,
+        forbidNonWhitelisted: true,
+        transform: true,
       }),
     },
   ],
@@ -169,7 +208,6 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       ? exception.getResponse()
       : { code: 50000, message: '内部服务错误' };
 
-    // 生产环境不暴露堆栈与内部细节
     response.status(status).send({
       ...body,
       traceId: request.id,

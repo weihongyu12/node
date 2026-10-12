@@ -68,6 +68,6 @@ export default [
 :::
 
 :::tip[参见]
-- [功能设计 · 安全基线](../../../features/security/README.md)：运行时防护（Helmet、CORS、限流、校验、脱敏）
+- [功能设计 · 安全基线](../../../features/security/README.md)：运行时防护（安全头、CSRF、CORS、限流、校验、脱敏）
 - [Node.js 规范 · 安全编码](../../code/node/README.md)：安全规则对应的编码实践
 :::
