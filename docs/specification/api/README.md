@@ -16,17 +16,13 @@ Node.js 服务对外暴露四类接口，分别遵循不同规范，但共享同
 | SSE | `/sse/**` | 服务端单向推送（看板大屏、进度、低频通知） |
 | GraphQL | `/graphql` | 聚合查询、BFF 数据拼装 |
 
-:::tip
-业务查询优先走 GraphQL，双向/高频推送走 WebSocket，单向/低频推送走 SSE，REST 仅作兜底——避免四类接口职责混用。
-:::
-
 ## REST 端点规范
 
 ### 命名
 
 - 资源名使用复数名词：`/api/callbacks/payment`，不使用动词
 - 层级不超过两级：`/api/{资源}/{动作或子资源}`
-- 健康检查固定为 `/api/health`（存活）与 `/api/health/ready`（就绪），供网关与 K8s 探针使用
+- 健康检查固定为 `/api/health`（存活）与 `/api/health/ready`（就绪），供网关与负载均衡探针使用
 
 ### 统一响应
 

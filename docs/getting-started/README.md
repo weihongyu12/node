@@ -8,10 +8,6 @@ import TabItem from '@theme/TabItem';
 
 # 架构
 
-:::tip
-本文档面向“Node.js 作为传统后端补充”的服务端架构：Node.js 服务不取代 Spring、Laravel 等传统后端，而是承接其不擅长的实时通信与聚合查询场景，并融入既有微服务体系。
-:::
-
 ## 定位：为什么是补充而非替代
 
 传统后端（Spring、Laravel）建立在“请求-响应”同步模型之上，擅长业务 CRUD、事务一致性、权限体系与报表计算，是业务数据的**唯一可信来源（System of Record）**。但在以下场景中，同步模型与运行时特性会成为瓶颈：
@@ -71,15 +67,15 @@ graph TD
 | SSE | NestJS 内置 [`@Sse()`](https://docs.nestjs.com/techniques/server-sent-events)（`@nestjs/common`，无额外依赖） |
 | GraphQL | [Apollo Server](https://www.apollographql.com/docs/apollo-server/)（[`@nestjs/apollo`](https://docs.nestjs.com/graphql/quick-start) + [`@as-integrations/fastify`](https://github.com/apollo-server-integrations/apollo-server-integration-fastify)） |
 | 语言 | [TypeScript](https://www.typescriptlang.org/) |
-| 认证 | [JWT](https://jwt.io/)（[`@nestjs/jwt`](https://github.com/nestjs/jwt)，与传统后端同源密钥 / JWKS） |
+| 认证 | [JWT](https://jwt.io/)（[`@nestjs/jwt`](https://github.com/nestjs/jwt)，ES256 公钥验签，令牌由传统后端签发） |
 | 参数校验 | [class-validator](https://github.com/typestack/class-validator) + [class-transformer](https://github.com/typestack/class-transformer) |
-| 安全头 | [`@fastify/helmet`](https://github.com/fastify/fastify-helmet) |
+| 安全头 / CSRF | 框架内置 [`useSecurityHeaders()`](https://docs.nestjs.com/security/headers) / [`enableCsrfProtection()`](https://docs.nestjs.com/security/csrf) |
 | 限流 | [`@nestjs/throttler`](https://github.com/nestjs/throttler) |
 | 缓存 / 广播 | [Redis](https://redis.io/)（[ioredis](https://github.com/redis/ioredis) + [`@socket.io/redis-adapter`](https://socket.io/docs/v4/redis-adapter/)） |
 | 消息队列 | [Kafka](https://kafka.apache.org/)（[`@nestjs/microservices`](https://docs.nestjs.com/microservices/kafka) / [kafkajs](https://kafka.js.org/)） |
 | 日志 | [nestjs-pino](https://github.com/iamolegga/nestjs-pino)（[pino](https://github.com/pinojs/pino)，Fastify 原生日志器） |
-| 健康检查 | [`@nestjs/terminus`](https://docs.nestjs.com/recipes/terminus) |
-| 单元测试 | Jest |
+| 健康检查 | [`@nestjs/terminus`](https://docs.nestjs.com/reliability/terminus) |
+| 单元测试 | Vitest |
 | 代码检查 | ESLint |
 | 部署 | Docker |
 
@@ -123,10 +119,6 @@ graph TD
 
 **单向依赖**：入口层（controller / gateway / resolver）→ service → 下游客户端，禁止反向引用；横切 provider 可作用于任意入口。
 
-:::tip[NestJS 的核心收益]
-Guard、Interceptor、Pipe、Exception Filter 等横切组件在 HTTP、WebSocket、Microservices 三种上下文中通用——同一套 JWT 校验 Guard 可同时保护 REST 端点、Socket.IO 事件与 GraphQL 查询，这是“保留传统后端一样的接口鉴权和安全”的框架基础。
-:::
-
 ## 快速开始
 
 ### 初始化项目
@@ -157,7 +149,6 @@ async function bootstrap() {
     AppModule,
     new FastifyAdapter(),
   );
-  // 容器/网关环境必须监听 0.0.0.0，Fastify 默认仅监听 127.0.0.1
   await app.listen(process.env.PORT ?? 3000, '0.0.0.0');
 }
 bootstrap();
@@ -166,20 +157,15 @@ bootstrap();
 ### 安装核心能力
 
 ```bash
-# WebSocket（Socket.IO）
 pnpm add @nestjs/websockets @nestjs/platform-socket.io
 
-# SSE：NestJS 内置 @Sse()，无需额外依赖
-
-# GraphQL（Apollo Server + Fastify 集成）
 pnpm add @nestjs/graphql @nestjs/apollo @apollo/server @as-integrations/fastify graphql
 
-# 配置 / 认证 / 校验 / 限流
 pnpm add @nestjs/config @nestjs/jwt class-validator class-transformer @nestjs/throttler
 ```
 
 :::warning[Fastify 平台差异]
-切换 Fastify 后，Nest 的 HTTP provider 变为 Fastify，**依赖 Express 的中间件与生态包不再可用**，需使用 Fastify 等价物：`helmet` → `@fastify/helmet`、`@apollo/server` → 搭配 `@as-integrations/fastify`、压缩 → `@fastify/compress`。
+切换 Fastify 后，Nest 的 HTTP provider 变为 Fastify，**依赖 Express 的中间件与生态包不再可用**，需使用 Fastify 等价物：安全头 → 框架内置 `useSecurityHeaders()`、`@apollo/server` → 搭配 `@as-integrations/fastify`、压缩 → `@fastify/compress`。
 :::
 
 ## 技术运用
@@ -207,6 +193,7 @@ pnpm add @nestjs/config @nestjs/jwt class-validator class-transformer @nestjs/th
 | [@nestjs/graphql](https://docs.nestjs.com/graphql/quick-start) + [@nestjs/apollo](https://docs.nestjs.com/graphql/quick-start) | GraphQL 模块（Apollo 驱动） |
 | [@apollo/server](https://www.apollographql.com/docs/apollo-server/) + [@as-integrations/fastify](https://github.com/apollo-server-integrations/apollo-server-integration-fastify) | Apollo Server 5 及其 Fastify 集成 |
 | [@nestjs/microservices](https://docs.nestjs.com/microservices/basics) | 微服务传输层（Kafka 等） |
+| [@nestjs/http-client](https://docs.nestjs.com/application/http-client) | 内部 REST 客户端（基于 Node.js 内置 fetch，命名客户端） |
 
 ### 工具库
 

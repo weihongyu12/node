@@ -141,7 +141,7 @@ client.get('key', (err, value) => {
 :::danger[不建议 👎]
 ```ts
 if (!config.redisUrl) {
-  process.exit(1); // 直接杀死进程，K8s 无法区分故障类型
+  process.exit(1); // 直接杀死进程，编排平台无法区分故障类型
 }
 ```
 :::

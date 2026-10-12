@@ -18,10 +18,6 @@ NestJS 默认使用 Express，切换 Fastify 后核心收益：
 
 > 数据来自 Fastify 官方基准测试（Node.js 22，简单 JSON 响应）。实际业务场景差异取决于下游调用与序列化开销。
 
-:::tip
-WebSocket 与 GraphQL 场景下，HTTP 框架本身不是瓶颈；Fastify 的收益主要体现在 REST 兜底端点与健康检查的高并发响应。
-:::
-
 ## WebSocket 长连接容量
 
 单实例 Node.js 服务的理论容量（4C8G 容器）：
@@ -77,7 +73,7 @@ Node.js 单线程事件循环是性能根基：**任何阻塞都会拖垮该实�
 // infra/worker/report.worker.ts
 import { parentPort, workerData } from 'node:worker_threads';
 
-const result = heavyCompute(workerData); // CPU 密集计算
+const result = heavyCompute(workerData);
 parentPort?.postMessage(result);
 ```
 
@@ -97,20 +93,15 @@ export class ReportService {
 }
 ```
 
-:::tip[选型原则]
-- 偶发、轻量 CPU 任务 → `worker_threads`（避免跨服务往返）
-- 高频、重型计算（图像处理、大批量导出） → 甩回 Spring 服务，Node.js 只做编排——这正符合“Node.js 做传统后端不擅长的事”的定位，反向同理
-:::
-
 ### cluster 与多实例部署
 
 | 部署形态 | 多进程策略 | 说明 |
 |---------|-----------|------|
-| **K8s / 容器（推荐）** | 不用 `cluster`，一容器一进程 | 多副本由 K8s 调度，滚动更新与故障隔离由平台负责 |
+| **容器化（推荐）** | 不用 `cluster`，一容器一进程 | 多副本由容器编排平台调度，滚动更新与故障隔离由平台负责 |
 | 裸机 / VM | `node:cluster` 或 PM2 按 CPU 核数起多进程 | 进程级故障自动拉起，端口共享由 cluster 模块处理 |
 
 :::warning
-容器内使用 `cluster` 会干扰 K8s 的副本调度与资源计量（HPA 按 Pod 指标工作），属于反模式。多实例部署的 WebSocket 前置条件（Sticky Session + Redis Adapter）见上文“水平扩展策略”。
+容器内使用 `cluster` 会干扰编排平台的副本调度与资源计量（自动扩缩容按容器指标工作），属于反模式。多实例部署的 WebSocket 前置条件（Sticky Session + Redis Adapter）见上文“水平扩展策略”。
 :::
 
 ## 水平扩展策略
@@ -134,12 +125,12 @@ graph TD
 
 | 扩展维度 | 策略 | 触发条件 |
 |---------|------|---------|
-| 实例数 | HPA：CPU 70% 或内存 80% 扩容 | 连接数或消息量增长 |
+| 实例数 | 按指标自动扩缩容（CPU 70% 或内存 80%） | 连接数或消息量增长 |
 | 连接分布 | 网关 / LB Sticky Session（按客户端 IP 或 Cookie） | 握手请求固定到同一实例 |
 | 广播范围 | Redis adapter 全集群覆盖 | 任意实例发起广播 |
 
 :::warning[多实例两大门槛：Sticky Session + Redis Adapter，缺一不可]
-- **Sticky Session 必须配置**：Socket.IO 握手由多次 HTTP 请求组成（polling → upgrade），不做会话亲和时请求被轮询到不同实例，握手直接失败。在网关 / 负载均衡层按客户端 IP 或 Cookie 保持亲和（K8s Service 配置 `sessionAffinity: ClientIP` 即可）
+- **Sticky Session 必须配置**：Socket.IO 握手由多次 HTTP 请求组成（polling → upgrade），不做会话亲和时请求被轮询到不同实例，握手直接失败。在网关 / 负载均衡层按客户端 IP 或 Cookie 保持亲和（配置方式见 [网关接入 · 多实例 Sticky Session](../../integration/gateway/README.md#多实例-sticky-session)）
 - **Redis Adapter 必须配置**：连接固定在某实例后，跨实例消息寻址（`server.to(room).emit`）依赖 Redis Pub/Sub 转发，见 [WebSocket · 多实例广播](../../features/websocket/README.md#多实例广播)
 - 二者职责不同：Sticky Session 解决“握手与连接归属”，Redis Adapter 解决“跨实例消息可达”
 :::
